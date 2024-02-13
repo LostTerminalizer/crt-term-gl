@@ -6,22 +6,29 @@ use glow::HasContext;
 
 fn main() {
     let mut glfw = glfw::init::<()>(None).unwrap();
+    glfw.set_swap_interval(glfw::SwapInterval::Sync(1));
     let (mut win, events) = glfw
-        .create_window(540, 300, "crt-term-gl", glfw::WindowMode::Windowed)
+        .create_window(1280, 720, "crt-term-gl", glfw::WindowMode::Windowed)
         .unwrap();
 
     let gl =
         Arc::new(unsafe { glow::Context::from_loader_function(|proc| win.get_proc_address(proc)) });
 
     let draw_size = win.get_framebuffer_size();
+
+    let default_screen_info = ScreenInfo {
+        gl_pos: [-1.0, -1.0],
+        gl_size: [2.0, 2.0],
+            
+        chars_size: [80, 20],
+        frame_size: [0; 2]
+    };
+
     let mut crt = crt_term_gl::CRTTerm::new(
         gl.clone(),
         ScreenInfo {
-            gl_pos: [-1.0, -1.0],
-            gl_size: [2.0, 2.0],
-            //chars_size: [54, 15],
-            chars_size: [20, 5],
-            frame_size: [draw_size.0 as u32, draw_size.1 as u32]
+            frame_size: [draw_size.0 as u32, draw_size.1 as u32],
+            ..default_screen_info
         },
     );
 
@@ -29,7 +36,7 @@ fn main() {
     win.make_current();
     win.set_framebuffer_size_polling(true);
 
-    crt.write_str("\nHello, world. I hope you can hear me.\n\nMission Day 65535\n----------------").unwrap();
+    crt.write_str("\nHello, world. I hope you can hear me.\n\nMission Day 65535\n----------------\n\n").unwrap();
     let mut counter = 0;
     while !win.should_close() {
         glfw.poll_events();
@@ -38,19 +45,18 @@ fn main() {
             if let glfw::WindowEvent::FramebufferSize(width, height) = event {
                 unsafe { gl.viewport(0, 0, width, height) };
                 crt.screen_changed(ScreenInfo {
-                    gl_pos: [-1.0, -1.0],
-                    gl_size: [2.0, 2.0],
-                    // chars_size: [60, 15],
-                    chars_size: [20, 5],
-                    frame_size: [width as u32, height as u32]
+                    frame_size: [width as u32, height as u32],
+                    ..default_screen_info
                 },);
             }
         }
 
-        // counter += 1;
-        // if counter >= 40 {
-        //     counter = 0;
-        // }
+        const LETTERS: &str = "abcdefghijklmnopqrstuvwxyz";
+
+        counter += 1;
+        if counter >= LETTERS.len() {
+            counter = 0;
+        }
 
         // let c = match counter / 10 {
         //     0 => '|',
@@ -60,8 +66,8 @@ fn main() {
         //     _ => unreachable!()
         // };
 
-        // crt.cursor = [0, 1];
-        // crt.write_char(c).unwrap();
+        crt.cursor[1] = 5;
+        crt.write_char(LETTERS.chars().nth(counter).unwrap()).unwrap();
 
         unsafe { gl.clear(glow::COLOR_BUFFER_BIT) };
 

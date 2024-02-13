@@ -1,4 +1,4 @@
-use std::{array, fmt::Write, fs::File, io::BufReader, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use glow::HasContext;
 
@@ -23,13 +23,20 @@ pub struct CRTTerm<C: HasContext> {
     quad_buf_verts: C::VertexArray,
     font_buf_verts: C::VertexArray,
     cursor_buf_verts: C::VertexArray,
+
     default_program: C::Program,
     white_program: C::Program,
     crt_fading_program: C::Program,
     crt_warp_program: C::Program,
+    crt_effects_program: C::Program,
+
     font_texture: C::Texture,
     fade_texture: C::Texture,
     fade_framebuffer: C::Framebuffer,
+    
+    
+    effects_texture: C::Texture,
+    effects_framebuffer: C::Framebuffer,
 
     //time_uniform: C::UniformLocation,
     start_time: Instant,
@@ -72,6 +79,7 @@ const WHITE_FRAG_SHADER: &str = r#"#version 330 core
 
 const CRT_WARP_FRAG_SHADER: &str = include_str!("crt_warp.frag.glsl");
 const CRT_FADING_FRAG_SHADER: &str = include_str!("crt_fading.frag.glsl");
+const CRT_EFFECTS_SHADER: &str = include_str!("crt_effects.frag.glsl");
 
 const FONT_5X11: &[u8] = include_bytes!("../font_5x11.png");
 const FONT_COLS: u32 = 32;
@@ -103,10 +111,15 @@ impl<C: HasContext> CRTTerm<C> {
         let white_program = unsafe { gl.create_program().unwrap() };
         let crt_warp_program = unsafe { gl.create_program().unwrap() };
         let crt_fading_program = unsafe { gl.create_program().unwrap() };
+        let crt_effects_program = unsafe { gl.create_program().unwrap() };
+
         let font_texture = unsafe { gl.create_texture().unwrap() };
 
         let fade_texture = unsafe { gl.create_texture().unwrap() };
         let fade_framebuffer = unsafe { gl.create_framebuffer().unwrap() };
+        
+        let effects_texture = unsafe { gl.create_texture().unwrap() };
+        let effects_framebuffer = unsafe { gl.create_framebuffer().unwrap() };
 
         unsafe {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(main_quad_buf));
@@ -180,6 +193,12 @@ impl<C: HasContext> CRTTerm<C> {
                 crt_fading_program,
                 VERT_SHADER,
                 CRT_FADING_FRAG_SHADER,
+            );
+            construct_program(
+                gl.as_ref(),
+                crt_effects_program,
+                VERT_SHADER,
+                CRT_EFFECTS_SHADER,
             );
             construct_program(gl.as_ref(), default_program, VERT_SHADER, FRAG_SHADER);
             construct_program(gl.as_ref(), white_program, VERT_SHADER, WHITE_FRAG_SHADER);
@@ -259,6 +278,44 @@ impl<C: HasContext> CRTTerm<C> {
             gl.draw_buffers(&[glow::COLOR_ATTACHMENT0]);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
+            gl.bind_texture(glow::TEXTURE_2D, Some(effects_texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGB as i32,
+                screen.frame_size[0] as i32,
+                screen.frame_size[1] as i32,
+                0,
+                glow::RGB,
+                glow::UNSIGNED_BYTE,
+                None,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_R,
+                glow::CLAMP_TO_BORDER as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_BORDER as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_BORDER as i32,
+            );
+
             // gl.bind_buffer(glow::ARRAY_BUFFER, None);
         }
 
@@ -281,10 +338,14 @@ impl<C: HasContext> CRTTerm<C> {
             white_program,
             crt_warp_program,
             crt_fading_program,
+            crt_effects_program,
 
             font_texture,
             fade_framebuffer,
             fade_texture,
+
+            effects_texture,
+            effects_framebuffer,
 
             //time_uniform,
             start_time: Instant::now(),
@@ -328,19 +389,19 @@ impl<C: HasContext> CRTTerm<C> {
 
             gl.bind_texture(glow::TEXTURE_2D, Some(self.fade_texture));
             gl.use_program(Some(self.crt_fading_program));
-            gl.uniform_1_f32(
-                gl.get_uniform_location(self.crt_fading_program, "time")
-                    .as_ref(),
-                Instant::now()
-                    .saturating_duration_since(self.start_time)
-                    .as_secs_f32(),
-            );
-            gl.uniform_2_f32(
-                gl.get_uniform_location(self.crt_fading_program, "pixelSize")
-                    .as_ref(),
-                1.0 / self.screen.frame_size[0] as f32,
-                1.0 / self.screen.frame_size[1] as f32,
-            );
+            // gl.uniform_1_f32(
+            //     gl.get_uniform_location(self.crt_fading_program, "time")
+            //         .as_ref(),
+            //     Instant::now()
+            //         .saturating_duration_since(self.start_time)
+            //         .as_secs_f32(),
+            // );
+            // gl.uniform_2_f32(
+            //     gl.get_uniform_location(self.crt_fading_program, "pixelSize")
+            //         .as_ref(),
+            //     1.0 / self.screen.frame_size[0] as f32,
+            //     1.0 / self.screen.frame_size[1] as f32,
+            // );
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
 
             let char_bounds_w = self.screen.gl_size[0] / self.screen.chars_size[0] as f32;
@@ -400,15 +461,44 @@ impl<C: HasContext> CRTTerm<C> {
             
             gl.draw_arrays(glow::TRIANGLES, 0, self.font_buffer_cache.len() as i32 / 16);
 
+            // gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.effects_framebuffer));
+            gl.framebuffer_texture(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                Some(self.effects_texture),
+                0,
+            );
+
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.fade_texture));
+            gl.bind_vertex_array(Some(self.main_buf_verts));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.main_quad_buf));
+
+            gl.use_program(Some(self.crt_effects_program));
+
+            gl.uniform_2_f32(
+                gl.get_uniform_location(self.crt_effects_program, "pixelSize")
+                    .as_ref(),
+                1.0 / self.screen.frame_size[0] as f32,
+                1.0 / self.screen.frame_size[1] as f32,
+            );
+            gl.uniform_1_f32(
+                gl.get_uniform_location(self.crt_effects_program, "time")
+                    .as_ref(),
+                Instant::now()
+                    .saturating_duration_since(self.start_time)
+                    .as_secs_f32(),
+            );
+
+            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
             gl.bind_vertex_array(Some(self.main_buf_verts));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.main_quad_buf));
             gl.use_program(Some(self.crt_warp_program));
-            gl.uniform_1_f32(gl.get_uniform_location(self.crt_warp_program, "scanlineSize").as_ref(), 
-            1.0 / ( self.screen.chars_size[1] as f32 * (FONT_CHAR_HEIGHT + FONT_SPACING_X) as f32)
-            );
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.fade_texture));
+            
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.effects_texture));
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
         }
 
@@ -441,6 +531,19 @@ impl<C: HasContext> CRTTerm<C> {
 
             if self.screen.frame_size != screen.frame_size {
                 gl.bind_texture(glow::TEXTURE_2D, Some(self.fade_texture));
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGB as i32,
+                    screen.frame_size[0] as i32,
+                    screen.frame_size[1] as i32,
+                    0,
+                    glow::RGB,
+                    glow::UNSIGNED_BYTE,
+                    None,
+                );
+
+                gl.bind_texture(glow::TEXTURE_2D, Some(self.effects_texture));
                 gl.tex_image_2d(
                     glow::TEXTURE_2D,
                     0,
@@ -523,6 +626,7 @@ impl<C: HasContext> std::fmt::Write for CRTTerm<C> {
             self.scroll();
         }
         self.cursor = cursor;
+        self.cursor_blinker = 60;
 
         Ok(())
     }
