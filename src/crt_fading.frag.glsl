@@ -30,7 +30,7 @@ void main() {
 
     float fade = 0.1;
 
-    vec3 bg = sample(uv).rgb * 0.95 - 0.05;
+    vec3 bg = sample(uv).rgb * 0.9 - 0.1;
 
     // vec2 pixel = pixelSize * 1;
 

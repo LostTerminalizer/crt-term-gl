@@ -8,6 +8,9 @@ pub struct ScreenInfo {
     pub gl_size: [f32; 2],
     pub frame_size: [u32; 2],
     pub chars_size: [usize; 2],
+
+    pub back_color: [u8; 3],
+    pub color: [u8; 3],
 }
 
 pub struct CRTTerm<C: HasContext> {
@@ -20,7 +23,7 @@ pub struct CRTTerm<C: HasContext> {
     font_buf: C::Buffer,
     cursor_buf: C::Buffer,
     main_buf_verts: C::VertexArray,
-    quad_buf_verts: C::VertexArray,
+    full_buf_verts: C::VertexArray,
     font_buf_verts: C::VertexArray,
     cursor_buf_verts: C::VertexArray,
 
@@ -33,19 +36,17 @@ pub struct CRTTerm<C: HasContext> {
     font_texture: C::Texture,
     fade_texture: C::Texture,
     fade_framebuffer: C::Framebuffer,
-    
-    
+
     effects_texture: C::Texture,
     effects_framebuffer: C::Framebuffer,
 
-    //time_uniform: C::UniformLocation,
     start_time: Instant,
     font_buffer_cache: Vec<u8>,
     font_buffer_vertices: u32,
 
     pub cursor: [usize; 2],
-    cursor_blinker: i32, 
-    chars: Box<[Box<[char]>]>,
+    cursor_blinker: i32,
+    pub chars: Box<[Box<[char]>]>,
 }
 
 const VERT_SHADER: &str = r#"#version 330 core
@@ -82,14 +83,18 @@ const CRT_FADING_FRAG_SHADER: &str = include_str!("crt_fading.frag.glsl");
 const CRT_EFFECTS_SHADER: &str = include_str!("crt_effects.frag.glsl");
 
 const FONT_5X11: &[u8] = include_bytes!("../font_5x11.png");
-const FONT_COLS: u32 = 32;
-const FONT_ROWS: u32 = 4;
-const FONT_CHAR_WIDTH: u32 = 5;
-const FONT_CHAR_HEIGHT: u32 = 11;
-const FONT_IMAGE_SPACING_X: u32 = 1;
-const FONT_IMAGE_SPACING_Y: u32 = 1;
-const FONT_SPACING_X: u32 = 1;
-const FONT_SPACING_Y: u32 = 1;
+const FONT_COLS: usize = 32;
+const FONT_ROWS: usize = 4;
+const FONT_CHAR_WIDTH: usize = 5;
+const FONT_CHAR_HEIGHT: usize = 11;
+const FONT_IMAGE_SPACING_X: usize = 1;
+const FONT_IMAGE_SPACING_Y: usize = 1;
+const FONT_SPACING_X: usize = 1;
+const FONT_SPACING_Y: usize = 1;
+
+const CRT_SCALE: f32 = 0.99;
+
+const DEBUG_NO_WARP: bool = false;
 
 impl<C: HasContext> CRTTerm<C> {
     pub fn new(gl: Arc<C>, screen: ScreenInfo) -> Self {
@@ -103,7 +108,7 @@ impl<C: HasContext> CRTTerm<C> {
         let cursor_buf = unsafe { gl.create_buffer().unwrap() };
 
         let main_buf_verts = unsafe { gl.create_vertex_array().unwrap() };
-        let quad_buf_verts = unsafe { gl.create_vertex_array().unwrap() };
+        let full_buf_verts = unsafe { gl.create_vertex_array().unwrap() };
         let font_buf_verts = unsafe { gl.create_vertex_array().unwrap() };
         let cursor_buf_verts = unsafe { gl.create_vertex_array().unwrap() };
 
@@ -117,7 +122,7 @@ impl<C: HasContext> CRTTerm<C> {
 
         let fade_texture = unsafe { gl.create_texture().unwrap() };
         let fade_framebuffer = unsafe { gl.create_framebuffer().unwrap() };
-        
+
         let effects_texture = unsafe { gl.create_texture().unwrap() };
         let effects_framebuffer = unsafe { gl.create_framebuffer().unwrap() };
 
@@ -174,7 +179,7 @@ impl<C: HasContext> CRTTerm<C> {
                 glow::STATIC_DRAW,
             );
 
-            gl.bind_vertex_array(Some(quad_buf_verts));
+            gl.bind_vertex_array(Some(full_buf_verts));
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 16, 0);
             gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, 16, 8);
             gl.enable_vertex_attrib_array(0);
@@ -328,9 +333,9 @@ impl<C: HasContext> CRTTerm<C> {
             main_quad_buf,
             font_buf,
             cursor_buf,
-            
+
             main_buf_verts,
-            quad_buf_verts,
+            full_buf_verts,
             font_buf_verts,
             cursor_buf_verts,
 
@@ -372,7 +377,7 @@ impl<C: HasContext> CRTTerm<C> {
 
         unsafe {
             let gl = &self.gl;
-            gl.bind_vertex_array(Some(self.quad_buf_verts));
+            gl.bind_vertex_array(Some(self.full_buf_verts));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.full_quad_buf));
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fade_framebuffer));
             gl.framebuffer_texture(
@@ -382,47 +387,44 @@ impl<C: HasContext> CRTTerm<C> {
                 0,
             );
 
-            // let buf_w =
-            //     (self.screen.chars_size[0] as u32 * (FONT_CHAR_WIDTH + FONT_SPACING_X)) as i32;
-            // let buf_h =
-            //     (self.screen.chars_size[1] as u32 * (FONT_CHAR_HEIGHT + FONT_SPACING_Y)) as i32;
-
             gl.bind_texture(glow::TEXTURE_2D, Some(self.fade_texture));
             gl.use_program(Some(self.crt_fading_program));
-            // gl.uniform_1_f32(
-            //     gl.get_uniform_location(self.crt_fading_program, "time")
-            //         .as_ref(),
-            //     Instant::now()
-            //         .saturating_duration_since(self.start_time)
-            //         .as_secs_f32(),
-            // );
-            // gl.uniform_2_f32(
-            //     gl.get_uniform_location(self.crt_fading_program, "pixelSize")
-            //         .as_ref(),
-            //     1.0 / self.screen.frame_size[0] as f32,
-            //     1.0 / self.screen.frame_size[1] as f32,
-            // );
+
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
 
-            let char_bounds_w = self.screen.gl_size[0] / self.screen.chars_size[0] as f32;
-            let char_bounds_h = self.screen.gl_size[1] / self.screen.chars_size[1] as f32;
+            let gl_pos = [-1.0; 2];
+            let gl_size = [2.0; 2];
+
+            let char_bounds_w = gl_size[0] / self.screen.chars_size[0] as f32;
+
+            // remap char bounds to not include FONT_SPACING_X at the last column
+            let char_bounds_w = char_bounds_w * (self.screen.chars_size[0] * (FONT_CHAR_WIDTH + FONT_SPACING_X)) as f32
+                / (self.screen.chars_size[0] * FONT_CHAR_WIDTH + (self.screen.chars_size[0] - 1) * FONT_SPACING_X) as f32;
+
+            let char_bounds_h = gl_size[1] / self.screen.chars_size[1] as f32;
+
+            let char_bounds_w = char_bounds_w * CRT_SCALE;
+            let char_bounds_h = char_bounds_h * CRT_SCALE;
 
             let char_w = (char_bounds_w / (FONT_CHAR_WIDTH + FONT_SPACING_X) as f32)
                 * FONT_CHAR_WIDTH as f32;
             let char_h = (char_bounds_h / (FONT_CHAR_HEIGHT + FONT_SPACING_Y) as f32)
                 * FONT_CHAR_HEIGHT as f32;
 
+            let gl_offset_x = gl_size[0] * (1.0 - CRT_SCALE) * 0.5;
+            let gl_offset_y = gl_size[1] * (1.0 - CRT_SCALE) * 0.5;
+
             for (y, row) in self.chars.iter().enumerate() {
                 for (x, char) in row.iter().copied().enumerate() {
-
                     if char == '\0' {
                         continue;
                     }
 
-                    let gl_x = self.screen.gl_pos[0] + x as f32 * char_bounds_w;
-                    let gl_y = self.screen.gl_pos[1] + self.screen.gl_size[1]
+                    let gl_x = gl_offset_x + gl_pos[0] + x as f32 * char_bounds_w;
+                    let gl_y =  gl_pos[1] + gl_size[1]
                         - char_h
-                        - y as f32 * char_bounds_h;
+                        - y as f32 * char_bounds_h
+                        - gl_offset_y;
 
                     add_glyph(
                         &mut self.font_buffer_cache,
@@ -434,15 +436,21 @@ impl<C: HasContext> CRTTerm<C> {
             }
 
             if self.cursor_blinker > 0 {
-                let gl_x = self.screen.gl_pos[0] + self.cursor[0] as f32 * char_bounds_w;
-                let gl_y = self.screen.gl_pos[1] + self.screen.gl_size[1]
-                    - (self.cursor[1] + 1) as f32 * char_bounds_h;
+                let gl_x = gl_offset_x + gl_pos[0] + self.cursor[0] as f32 * char_bounds_w;
+                let gl_y = gl_pos[1] + gl_size[1]
+                    - (self.cursor[1] + 1) as f32 * char_bounds_h - gl_offset_y;
 
                 gl.bind_vertex_array(Some(self.cursor_buf_verts));
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.cursor_buf));
                 gl.buffer_data_u8_slice(
                     glow::ARRAY_BUFFER,
-                    &create_quad_data_tri_strip([gl_x, gl_y], [char_bounds_w, char_bounds_h], [0.0, 0.0], [0.0, 0.0], false),
+                    &create_quad_data_tri_strip(
+                        [gl_x, gl_y],
+                        [char_bounds_w, char_bounds_h],
+                        [0.0, 0.0],
+                        [0.0, 0.0],
+                        false,
+                    ),
                     glow::STREAM_DRAW,
                 );
                 gl.use_program(Some(self.white_program));
@@ -458,21 +466,24 @@ impl<C: HasContext> CRTTerm<C> {
             );
             gl.bind_texture(glow::TEXTURE_2D, Some(self.font_texture));
             gl.use_program(Some(self.default_program));
-            
+
             gl.draw_arrays(glow::TRIANGLES, 0, self.font_buffer_cache.len() as i32 / 16);
 
-            // gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.effects_framebuffer));
-            gl.framebuffer_texture(
-                glow::FRAMEBUFFER,
-                glow::COLOR_ATTACHMENT0,
-                Some(self.effects_texture),
-                0,
-            );
+            if DEBUG_NO_WARP {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            } else {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.effects_framebuffer));
+                gl.framebuffer_texture(
+                    glow::FRAMEBUFFER,
+                    glow::COLOR_ATTACHMENT0,
+                    Some(self.effects_texture),
+                    0,
+                );
+            }
 
             gl.bind_texture(glow::TEXTURE_2D, Some(self.fade_texture));
-            gl.bind_vertex_array(Some(self.main_buf_verts));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.main_quad_buf));
+            gl.bind_vertex_array(Some(self.full_buf_verts));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.full_quad_buf));
 
             gl.use_program(Some(self.crt_effects_program));
 
@@ -489,17 +500,34 @@ impl<C: HasContext> CRTTerm<C> {
                     .saturating_duration_since(self.start_time)
                     .as_secs_f32(),
             );
+            gl.uniform_3_f32(
+                gl.get_uniform_location(self.crt_effects_program, "bgColor")
+                    .as_ref(),
+                self.screen.back_color[0] as f32 / 255.0,
+                self.screen.back_color[1] as f32 / 255.0,
+                self.screen.back_color[2] as f32 / 255.0,
+            );
+
+            gl.uniform_3_f32(
+                gl.get_uniform_location(self.crt_effects_program, "fgColor")
+                    .as_ref(),
+                self.screen.color[0] as f32 / 255.0,
+                self.screen.color[1] as f32 / 255.0,
+                self.screen.color[2] as f32 / 255.0,
+            );
 
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
 
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            if !DEBUG_NO_WARP {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
-            gl.bind_vertex_array(Some(self.main_buf_verts));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.main_quad_buf));
-            gl.use_program(Some(self.crt_warp_program));
-            
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.effects_texture));
-            gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                gl.bind_vertex_array(Some(self.main_buf_verts));
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.main_quad_buf));
+                gl.use_program(Some(self.crt_warp_program));
+
+                gl.bind_texture(glow::TEXTURE_2D, Some(self.effects_texture));
+                gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+            }
         }
 
         self.cursor_blinker = match self.cursor_blinker {
@@ -614,11 +642,10 @@ impl<C: HasContext> std::fmt::Write for CRTTerm<C> {
                 }
             }
         }
+        cursor[0] += 1;
         if c == '\n' || cursor[0] >= self.screen.chars_size[0] {
             cursor[0] = 0;
             cursor[1] += 1;
-        } else {
-            cursor[0] += 1;
         }
         if cursor[1] >= self.screen.chars_size[1] {
             cursor[0] = 0;
@@ -720,16 +747,16 @@ fn construct_program<C: HasContext>(gl: &C, program: C::Program, vert: &str, fra
 
 /// returns: `([x, y], [w, h])`
 fn get_font_glyph_uv(char: char) -> ([f32; 2], [f32; 2]) {
-    const FONT_IMAGE_WIDTH: u32 = FONT_COLS * (FONT_CHAR_WIDTH + FONT_IMAGE_SPACING_X);
-    const FONT_IMAGE_HEIGHT: u32 = FONT_ROWS * (FONT_CHAR_HEIGHT + FONT_IMAGE_SPACING_Y);
+    const FONT_IMAGE_WIDTH: usize = FONT_COLS * (FONT_CHAR_WIDTH + FONT_IMAGE_SPACING_X);
+    const FONT_IMAGE_HEIGHT: usize = FONT_ROWS * (FONT_CHAR_HEIGHT + FONT_IMAGE_SPACING_Y);
 
     const CHAR_UV_WIDTH: f32 = FONT_CHAR_WIDTH as f32 / FONT_IMAGE_WIDTH as f32;
     const CHAR_UV_HEIGHT: f32 = FONT_CHAR_HEIGHT as f32 / FONT_IMAGE_HEIGHT as f32;
 
     let ascii = if char.is_ascii() { char as u8 } else { 63 };
 
-    let col = ascii as u32 % FONT_COLS;
-    let row = ascii as u32 / FONT_COLS;
+    let col = ascii as usize % FONT_COLS;
+    let row = ascii as usize / FONT_COLS;
 
     let x = col * (FONT_CHAR_WIDTH + FONT_IMAGE_SPACING_X);
     let y = row * (FONT_CHAR_HEIGHT + FONT_IMAGE_SPACING_Y);
